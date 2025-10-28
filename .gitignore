@@ -1,5 +1,8 @@
 .vscode/
 
+sdkconfig
+sdkconfig.old
+
 .config
 *.o
 *.pyc

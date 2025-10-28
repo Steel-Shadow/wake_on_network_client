@@ -1,0 +1,5 @@
+dependencies:
+  espressif/esp_websocket_client:
+    version: ^1.0.0
+  idf: '>=5.0'
+  espressif/cjson: ^1.7.19
