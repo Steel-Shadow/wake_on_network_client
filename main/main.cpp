@@ -20,9 +20,8 @@
 #include "freertos/projdefs.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
-#include "cJSON.h"
 #include <cassert>
-#include <string> // TODO: string 可以用吗？
+#include <string.h>
 
 /* The examples use simple WiFi configuration that you can set via
    project configuration menu.
@@ -40,8 +39,6 @@
 #define EXAMPLE_EAP_USERNAME CONFIG_EXAMPLE_EAP_USERNAME
 #define EXAMPLE_EAP_PASSWORD CONFIG_EXAMPLE_EAP_PASSWORD
 #define EXAMPLE_SERVER_CERT_DOMAIN CONFIG_EXAMPLE_SERVER_CERT_DOMAIN
-
-// TODO: what is it ?
 
 namespace WiFi {
 static const char *LOG_TAG = "WiFi";
@@ -201,22 +198,20 @@ static void initialise_wifi() {
 } */
 }; // namespace WiFi
 
+bool str_equals(const char *str, size_t len, const char *target) {
+    size_t target_len = strlen(target);
+    if (len != target_len) return false;
+    return strncmp(str, target, len) == 0;
+}
+
 namespace Websocket_app {
 static const char *LOG_TAG = "Websocket";
-
-static TimerHandle_t shutdown_signal_timer;
-static SemaphoreHandle_t shutdown_sema;
-inline static int NO_DATA_TIMEOUT_SEC = 5;
+static SemaphoreHandle_t sema_shutdown;
 
 static void log_error_if_nonzero(const char *message, int error_code) {
     if (error_code != 0) {
         ESP_LOGE(LOG_TAG, "Last error %s: 0x%x", message, error_code);
     }
-}
-
-static void shutdown_signaler(TimerHandle_t xTimer) {
-    ESP_LOGI(LOG_TAG, "Already last for %d seconds, signaling shutdown", NO_DATA_TIMEOUT_SEC);
-    xSemaphoreGive(shutdown_sema);
 }
 
 static void websocket_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
@@ -238,32 +233,20 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
             }
             break;
         case WEBSOCKET_EVENT_DATA:
-            ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_DATA");
-            ESP_LOGI(LOG_TAG, "Received opcode=%d", data->op_code);
             if (data->op_code == 0x2) { // Opcode 0x2 indicates binary data
                 ESP_LOG_BUFFER_HEX("Received binary data", data->data_ptr, data->data_len);
             } else if (data->op_code == 0x08 && data->data_len == 2) {
                 ESP_LOGW(LOG_TAG, "Received closed message with code=%d", 256 * data->data_ptr[0] + data->data_ptr[1]);
+            } else if (data->op_code == 0x09 || data->op_code == 0x0a) {
+                // ping pong
             } else {
+                ESP_LOGW(LOG_TAG, "Total payload length=%d, data_len=%d, current payload offset=%d\r\n", data->payload_len, data->data_len, data->payload_offset);
                 ESP_LOGW(LOG_TAG, "Received=%.*s\n\n", data->data_len, (char *) data->data_ptr);
-            }
-            {
-                // If received data contains json structure it succeed to parse
-                cJSON *root = cJSON_Parse(data->data_ptr);
-                if (root) {
-                    for (int i = 0; i < cJSON_GetArraySize(root); i++) {
-                        cJSON *elem = cJSON_GetArrayItem(root, i);
-                        cJSON *id = cJSON_GetObjectItem(elem, "id");
-                        cJSON *name = cJSON_GetObjectItem(elem, "name");
-                        ESP_LOGW(LOG_TAG, "Json={'id': '%s', 'name': '%s'}", id->valuestring, name->valuestring);
-                    }
-                    cJSON_Delete(root);
+                const char *welcome = "welcome";
+                if (strncmp(welcome, data->data_ptr, strlen(welcome)) == 0) {
+                    xSemaphoreGive(sema_shutdown);
                 }
             }
-
-            ESP_LOGW(LOG_TAG, "Total payload length=%d, data_len=%d, current payload offset=%d\r\n", data->payload_len, data->data_len, data->payload_offset);
-
-            xTimerReset(shutdown_signal_timer, portMAX_DELAY);
             break;
         case WEBSOCKET_EVENT_ERROR:
             ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_ERROR");
@@ -281,17 +264,17 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
 }
 
 esp_websocket_client_config_t websocket_cfg = {};
-static void websocket_task_start() {
 
-    shutdown_sema = xSemaphoreCreateBinary();
-    shutdown_signal_timer = xTimerCreate("Websocket shutdown timer", NO_DATA_TIMEOUT_SEC * 1000 / portTICK_PERIOD_MS,
-                                         pdFALSE, NULL, shutdown_signaler);
+static void websocket_begin_task() {
+    // shutdown this task after "welcome"
+    sema_shutdown = xSemaphoreCreateBinary();
 
-    // TODO: 修改sdkconfig和 Kconfig.projbuild
-    // 我这里没有使用 CONFIG_WEBSOCKET_URI
-    const char *uri = "wss://wol.steel-shadow.duckdns.org/ws/Steel-Shadow_secret";
+    // wss://echo.websocket.org
+    // wss://wol.steel-shadow.duckdns.org/ws/Steel-Shadow_secret 8443
+    // wss://wol.steel-shadow.me/ws/Steel-Shadow_secret 443
+    const char *uri = "wss://wol.steel-shadow.me/ws/Steel-Shadow_secret";
     websocket_cfg.uri = uri;
-    websocket_cfg.port = 8443;
+    websocket_cfg.port = 443;
 
 
 #if CONFIG_WS_OVER_TLS_MUTUAL_AUTH
@@ -326,55 +309,22 @@ static void websocket_task_start() {
     esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler, (void *) client);
 
     esp_websocket_client_start(client);
-    xTimerStart(shutdown_signal_timer, portMAX_DELAY);
-    char data[32];
-    int i = 0;
-    while (i < 5) {
-        if (esp_websocket_client_is_connected(client)) {
-            int len = sprintf(data, "hello %04d", i++);
-            ESP_LOGI(LOG_TAG, "Sending %s", data);
-            esp_websocket_client_send_text(client, data, len, portMAX_DELAY);
-        }
+
+    while (!esp_websocket_client_is_connected(client)) {
+        ESP_LOGI(LOG_TAG, "Websocket is not connected, delaying...");
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    // Sending text data
-    ESP_LOGI(LOG_TAG, "Sending fragmented text message");
-    memset(data, 'a', sizeof(data));
-    esp_websocket_client_send_text_partial(client, data, sizeof(data), portMAX_DELAY);
-    memset(data, 'b', sizeof(data));
-    esp_websocket_client_send_cont_msg(client, data, sizeof(data), portMAX_DELAY);
-    esp_websocket_client_send_fin(client, portMAX_DELAY);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    char data[32] = "hello ESP32";
+    esp_websocket_client_send_text(client, data, 32, portMAX_DELAY);
 
-    // Sending binary data
-    ESP_LOGI(LOG_TAG, "Sending fragmented binary message");
-    char binary_data[5];
-    memset(binary_data, 0, sizeof(binary_data));
-    esp_websocket_client_send_bin_partial(client, binary_data, sizeof(binary_data), portMAX_DELAY);
-    memset(binary_data, 1, sizeof(binary_data));
-    esp_websocket_client_send_cont_msg(client, binary_data, sizeof(binary_data), portMAX_DELAY);
-    esp_websocket_client_send_fin(client, portMAX_DELAY);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-
-    // Sending text data longer than ws buffer (default 1024)
-    ESP_LOGI(LOG_TAG, "Sending text longer than ws buffer (default 1024)");
-    const int size = 200;
-    char *long_data = (char *) malloc(size); // use delete[] long_data; instead of free(long_data)
-    memset(long_data, 'a', size);
-    esp_websocket_client_send_text(client, long_data, size, portMAX_DELAY);
-    free(long_data);
-
-    xSemaphoreTake(shutdown_sema, portMAX_DELAY);
-    esp_websocket_client_close(client, portMAX_DELAY);
-    ESP_LOGI(LOG_TAG, "Websocket Stopped");
-    esp_websocket_unregister_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
-    esp_websocket_client_destroy(client);
-
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    // kill the task
-    xTimerDelete(shutdown_signal_timer, 0);
+    // delete the task after welcome
+    xSemaphoreTake(sema_shutdown, portMAX_DELAY);
+    ESP_LOGI(LOG_TAG, "task delete but remain the websocket");
+    // esp_websocket_client_close(client, portMAX_DELAY);
+    // ESP_LOGI(LOG_TAG, "Websocket Stopped");
+    // esp_websocket_unregister_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
+    // esp_websocket_client_destroy(client);
     vTaskDelete(NULL);
 }
 }; // namespace Websocket_app
@@ -385,9 +335,9 @@ extern "C" void app_main(void) {
     ESP_LOGI(LOG_TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(LOG_TAG, "[APP] IDF version: %s", esp_get_idf_version());
     esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set("websocket_client", ESP_LOG_DEBUG);
-    esp_log_level_set("transport_ws", ESP_LOG_DEBUG);
-    esp_log_level_set("trans_tcp", ESP_LOG_DEBUG);
+    esp_log_level_set("websocket_client", ESP_LOG_INFO);
+    esp_log_level_set("transport_ws", ESP_LOG_INFO);
+    esp_log_level_set("trans_tcp", ESP_LOG_INFO);
 
     ESP_ERROR_CHECK(nvs_flash_init());
 
@@ -408,7 +358,7 @@ extern "C" void app_main(void) {
         }
     }
 
-    // while (1) { // // TODO: 调整 测试 ip6 地址
+    // while (1) { // // 测试 ip6 地址
     //     esp_ip6_addr_t ip6[5];
     //     memset(&ip6, 0, 5 * sizeof(esp_ip6_addr_t));
     //     vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -432,7 +382,7 @@ extern "C" void app_main(void) {
     //     }
     // }
 
-    xTaskCreate((TaskFunction_t) &Websocket_app::websocket_task_start, "ws",
+    xTaskCreate((TaskFunction_t) &Websocket_app::websocket_begin_task, "ws",
                 4096, NULL, 5, NULL);
 
     // Websocket_app::websocket_task_start();
