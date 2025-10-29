@@ -198,12 +198,6 @@ static void initialise_wifi() {
 } */
 }; // namespace WiFi
 
-bool str_equals(const char *str, size_t len, const char *target) {
-    size_t target_len = strlen(target);
-    if (len != target_len) return false;
-    return strncmp(str, target, len) == 0;
-}
-
 namespace Websocket_app {
 static const char *LOG_TAG = "Websocket";
 static SemaphoreHandle_t sema_shutdown;
@@ -242,9 +236,13 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
             } else {
                 ESP_LOGW(LOG_TAG, "Total payload length=%d, data_len=%d, current payload offset=%d\r\n", data->payload_len, data->data_len, data->payload_offset);
                 ESP_LOGW(LOG_TAG, "Received=%.*s\n\n", data->data_len, (char *) data->data_ptr);
+
                 const char *welcome = "welcome";
+                const char *online = "online";
                 if (strncmp(welcome, data->data_ptr, strlen(welcome)) == 0) {
                     xSemaphoreGive(sema_shutdown);
+                } else if (strncmp(online, data->data_ptr, strlen(online)) == 0) {
+                    ESP_LOGW(LOG_TAG, "online!");
                 }
             }
             break;
