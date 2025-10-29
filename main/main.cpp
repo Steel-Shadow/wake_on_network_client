@@ -22,6 +22,7 @@
 #include "nvs_flash.h"
 #include "cJSON.h"
 #include <cassert>
+#include <string> // TODO: string 可以用吗？
 
 /* The examples use simple WiFi configuration that you can set via
    project configuration menu.
@@ -279,8 +280,8 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
     }
 }
 
+esp_websocket_client_config_t websocket_cfg = {};
 static void websocket_task_start() {
-    esp_websocket_client_config_t websocket_cfg = {};
 
     shutdown_sema = xSemaphoreCreateBinary();
     shutdown_signal_timer = xTimerCreate("Websocket shutdown timer", NO_DATA_TIMEOUT_SEC * 1000 / portTICK_PERIOD_MS,
@@ -288,7 +289,8 @@ static void websocket_task_start() {
 
     // TODO: 修改sdkconfig和 Kconfig.projbuild
     // 我这里没有使用 CONFIG_WEBSOCKET_URI
-    websocket_cfg.uri = "wss://wol.steel-shadow.duckdns.org/send";
+    const char *uri = "wss://wol.steel-shadow.duckdns.org/ws/Steel-Shadow_secret";
+    websocket_cfg.uri = uri;
     websocket_cfg.port = 8443;
 
 
@@ -386,7 +388,7 @@ extern "C" void app_main(void) {
     esp_log_level_set("websocket_client", ESP_LOG_DEBUG);
     esp_log_level_set("transport_ws", ESP_LOG_DEBUG);
     esp_log_level_set("trans_tcp", ESP_LOG_DEBUG);
-    
+
     ESP_ERROR_CHECK(nvs_flash_init());
 
     WiFi::initialise_wifi();
@@ -406,6 +408,32 @@ extern "C" void app_main(void) {
         }
     }
 
+    // while (1) { // // TODO: 调整 测试 ip6 地址
+    //     esp_ip6_addr_t ip6[5];
+    //     memset(&ip6, 0, 5 * sizeof(esp_ip6_addr_t));
+    //     vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    //     if (WiFi::sta_netif != NULL) {
+    //         esp_err_t err = esp_netif_create_ip6_linklocal(WiFi::sta_netif);
+    //         if (err != ESP_OK) {
+    //             ESP_LOGE(WiFi::LOG_TAG, "Failed to create IPv6 link-local address on start: %s", esp_err_to_name(err));
+    //         }
+    //     } else {
+    //         ESP_LOGE(WiFi::LOG_TAG, "WiFi::sta_netif is NULL on start");
+    //     }
+
+    //     if (esp_netif_get_all_ip6(WiFi::sta_netif, ip6) == 0) {
+    //         if (ip6->addr[0] || ip6->addr[1] || ip6->addr[2] || ip6->addr[3] != 0) {
+    //             for (int i = 0; i < 4; ++i) {
+    //                 ESP_LOGI(LOG_TAG, "IP%d:%d", i, (&ip6->addr[0]));
+    //             }
+    //             break;
+    //         }
+    //     }
+    // }
+
     xTaskCreate((TaskFunction_t) &Websocket_app::websocket_task_start, "ws",
                 4096, NULL, 5, NULL);
+
+    // Websocket_app::websocket_task_start();
 }
