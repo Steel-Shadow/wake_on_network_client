@@ -22,6 +22,7 @@
 #include "nvs_flash.h"
 #include <cassert>
 #include <string.h>
+#include "driver/gpio.h"
 
 /* The examples use simple WiFi configuration that you can set via
    project configuration menu.
@@ -198,6 +199,27 @@ static void initialise_wifi() {
 } */
 }; // namespace WiFi
 
+namespace Pin {
+auto pin = GPIO_NUM_4;
+
+static void init_pin() {
+    gpio_config_t io_conf = {
+            .pin_bit_mask = (1ULL << pin),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+}
+
+static void open_pc_power() {
+    gpio_set_level(pin, 1);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    gpio_set_level(pin, 0);
+}
+} // namespace Pin
+
 namespace Websocket_app {
 static const char *LOG_TAG = "Websocket";
 static SemaphoreHandle_t sema_shutdown;
@@ -243,6 +265,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
                     xSemaphoreGive(sema_shutdown);
                 } else if (strncmp(online, data->data_ptr, strlen(online)) == 0) {
                     ESP_LOGW(LOG_TAG, "online!");
+                    Pin::open_pc_power();
                 }
             }
             break;
@@ -338,6 +361,8 @@ extern "C" void app_main(void) {
     esp_log_level_set("trans_tcp", ESP_LOG_INFO);
 
     ESP_ERROR_CHECK(nvs_flash_init());
+
+    Pin::init_pin();
 
     WiFi::initialise_wifi();
     while (1) {
