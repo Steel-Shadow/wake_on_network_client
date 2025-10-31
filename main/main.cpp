@@ -21,8 +21,10 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include <cassert>
+#include <cstddef>
 #include <string.h>
 #include "driver/gpio.h"
+#include "portmacro.h"
 
 /* The examples use simple WiFi configuration that you can set via
    project configuration menu.
@@ -180,23 +182,6 @@ static void initialise_wifi() {
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-/* static void wifi_enterprise_example_task(void *pvParameters) {
-    esp_netif_ip_info_t ip;
-    memset(&ip, 0, sizeof(esp_netif_ip_info_t));
-    vTaskDelay(2000 / portTICK_PERIOD_MS);
-
-    while (1) {
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
-
-        if (esp_netif_get_ip_info(sta_netif, &ip) == 0) {
-            ESP_LOGI(LOG_TAG, "~~~~~~~~~~~");
-            ESP_LOGI(LOG_TAG, "IP:" IPSTR, IP2STR(&ip.ip));
-            ESP_LOGI(LOG_TAG, "MASK:" IPSTR, IP2STR(&ip.netmask));
-            ESP_LOGI(LOG_TAG, "GW:" IPSTR, IP2STR(&ip.gw));
-            ESP_LOGI(LOG_TAG, "~~~~~~~~~~~");
-        }
-    }
-} */
 }; // namespace WiFi
 
 namespace Pin {
@@ -222,7 +207,8 @@ static void open_pc_power() {
 
 namespace Websocket_app {
 static const char *LOG_TAG = "Websocket";
-static SemaphoreHandle_t sema_shutdown;
+static SemaphoreHandle_t sema_allow_reconnect_ws;
+static bool flag_first_message;
 
 static void log_error_if_nonzero(const char *message, int error_code) {
     if (error_code != 0) {
@@ -232,23 +218,30 @@ static void log_error_if_nonzero(const char *message, int error_code) {
 
 static void websocket_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_websocket_event_data_t *data = (esp_websocket_event_data_t *) event_data;
+    esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) handler_args;
     switch (event_id) {
         case WEBSOCKET_EVENT_BEGIN:
+            // The client thread is running.
             ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_BEGIN");
             break;
-        case WEBSOCKET_EVENT_CONNECTED:
-            ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_CONNECTED");
+        case WEBSOCKET_EVENT_BEFORE_CONNECT:
+            // The client is about to connect.
+            ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_BEFORE_CONNECT");
             break;
-        case WEBSOCKET_EVENT_DISCONNECTED:
-            ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_DISCONNECTED");
-            log_error_if_nonzero("HTTP status code", data->error_handle.esp_ws_handshake_status_code);
-            if (data->error_handle.error_type == WEBSOCKET_ERROR_TYPE_TCP_TRANSPORT) {
-                log_error_if_nonzero("reported from esp-tls", data->error_handle.esp_tls_last_esp_err);
-                log_error_if_nonzero("reported from tls stack", data->error_handle.esp_tls_stack_err);
-                log_error_if_nonzero("captured as transport's socket errno", data->error_handle.esp_transport_sock_errno);
+        case WEBSOCKET_EVENT_CONNECTED:
+            // The client has successfully established a connection to the server. The client is now ready to send and receive data. Contains no event data.
+            ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_CONNECTED");
+            ESP_LOGI(LOG_TAG, "Say \"hello ESP32\"");
+            {
+                static const char data[32] = "hello ESP32";
+                esp_websocket_client_send_text(client, data, 32, portMAX_DELAY);
             }
             break;
         case WEBSOCKET_EVENT_DATA:
+            // The client has successfully received and parsed a WebSocket frame.
+            // The event data contains a pointer to the payload data, the length of the payload data as well as the opcode of the received frame.
+            // A message may be fragmented into multiple events if the length exceeds the buffer size.
+            // This event will also be posted for non-payload frames, e.g. pong or connection close frames.
             if (data->op_code == 0x2) { // Opcode 0x2 indicates binary data
                 ESP_LOG_BUFFER_HEX("Received binary data", data->data_ptr, data->data_len);
             } else if (data->op_code == 0x08 && data->data_len == 2) {
@@ -260,16 +253,22 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
                 ESP_LOGW(LOG_TAG, "Received=%.*s\n\n", data->data_len, (char *) data->data_ptr);
 
                 const char *welcome = "welcome";
-                const char *online = "online";
-                if (strncmp(welcome, data->data_ptr, strlen(welcome)) == 0) {
-                    xSemaphoreGive(sema_shutdown);
-                } else if (strncmp(online, data->data_ptr, strlen(online)) == 0) {
-                    ESP_LOGW(LOG_TAG, "online!");
+                const char *trigger = "trigger";
+                if (flag_first_message) {
+                    flag_first_message = false;
+                    size_t len_welcome = strlen(welcome);
+                    if (!(len_welcome == data->data_len && strncmp(welcome, data->data_ptr, len_welcome) == 0)) {
+                        ESP_LOGE(LOG_TAG, "First message is not \"welcome\"!");
+                    }
+                } else if (strncmp(trigger, data->data_ptr, strlen(trigger)) == 0) {
+                    // [%*.*s]\n
+                    ESP_LOGW(LOG_TAG, "Server say: [%.*s]\n", data->data_len, data->data_ptr);
                     Pin::open_pc_power();
                 }
             }
             break;
         case WEBSOCKET_EVENT_ERROR:
+            // The client has experienced an error. Examples include transport write or read failures.
             ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_ERROR");
             log_error_if_nonzero("HTTP status code", data->error_handle.esp_ws_handshake_status_code);
             if (data->error_handle.error_type == WEBSOCKET_ERROR_TYPE_TCP_TRANSPORT) {
@@ -278,18 +277,42 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
                 log_error_if_nonzero("captured as transport's socket errno", data->error_handle.esp_transport_sock_errno);
             }
             break;
-        case WEBSOCKET_EVENT_FINISH:
-            ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_FINISH");
+        case WEBSOCKET_EVENT_DISCONNECTED:
+            //  The client has aborted the connection due to the transport layer failing to read data,
+            //  e.g. because the server is unavailable.
+            // Contains no event data.
+            ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_DISCONNECTED");
+            log_error_if_nonzero("HTTP status code", data->error_handle.esp_ws_handshake_status_code);
+            if (data->error_handle.error_type == WEBSOCKET_ERROR_TYPE_TCP_TRANSPORT) {
+                log_error_if_nonzero("reported from esp-tls", data->error_handle.esp_tls_last_esp_err);
+                log_error_if_nonzero("reported from tls stack", data->error_handle.esp_tls_stack_err);
+                log_error_if_nonzero("captured as transport's socket errno", data->error_handle.esp_transport_sock_errno);
+            }
             break;
+        case WEBSOCKET_EVENT_CLOSED:
+            // The connection has been closed cleanly.
+            ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_CLOSED");
+            break;
+        case WEBSOCKET_EVENT_FINISH:
+            // The client thread is about to exit.
+            ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_FINISH");
+            // TODO: 如果遇到error和disconnect还会走这里的finish吗？
+            xSemaphoreGive(sema_allow_reconnect_ws);
+            break;
+        default:
+            ESP_LOGW(LOG_TAG, "Websocket event handler get bad event_id: %d", event_id);
     }
 }
 
-esp_websocket_client_config_t websocket_cfg = {};
+static esp_websocket_client_handle_t client;
+static esp_websocket_client_config_t websocket_cfg;
 
-static void websocket_begin_task() {
-    // shutdown this task after "welcome"
-    sema_shutdown = xSemaphoreCreateBinary();
+// shutdown this task after "welcome"
+static void init_config() {
+    sema_allow_reconnect_ws = xSemaphoreCreateBinary();
 
+    flag_first_message = true;
+    websocket_cfg = {};
     // wss://echo.websocket.org
     // wss://wol.steel-shadow.duckdns.org/ws/Steel-Shadow_secret 8443
     // wss://wol.steel-shadow.me/ws/Steel-Shadow_secret 443
@@ -323,30 +346,27 @@ static void websocket_begin_task() {
 #if CONFIG_WS_OVER_TLS_SKIP_COMMON_NAME_CHECK
     websocket_cfg.skip_cert_common_name_check = true;
 #endif
+}
 
-    ESP_LOGI(LOG_TAG, "Connecting to %s...", websocket_cfg.uri);
+static void websocket_autoreconnect_task() {
+    init_config();
 
-    esp_websocket_client_handle_t client = esp_websocket_client_init(&websocket_cfg);
-    esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler, (void *) client);
+    do {
+        ESP_LOGI(LOG_TAG, "Connecting to %s...", websocket_cfg.uri);
+        client = esp_websocket_client_init(&websocket_cfg);
+        esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler, (void *) client);
+        esp_websocket_client_start(client);
 
-    esp_websocket_client_start(client);
+        xSemaphoreTake(sema_allow_reconnect_ws, portMAX_DELAY);
 
-    while (!esp_websocket_client_is_connected(client)) {
-        ESP_LOGI(LOG_TAG, "Websocket is not connected, delaying...");
+        esp_websocket_client_close(client, portMAX_DELAY);
+        esp_websocket_unregister_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
+        esp_websocket_client_close(client, portMAX_DELAY);
+
         vTaskDelay(1000 / portTICK_PERIOD_MS);
-    }
+    } while (1);
 
-    char data[32] = "hello ESP32";
-    esp_websocket_client_send_text(client, data, 32, portMAX_DELAY);
-
-    // delete the task after welcome
-    xSemaphoreTake(sema_shutdown, portMAX_DELAY);
-    ESP_LOGI(LOG_TAG, "task delete but remain the websocket");
-    // esp_websocket_client_close(client, portMAX_DELAY);
-    // ESP_LOGI(LOG_TAG, "Websocket Stopped");
-    // esp_websocket_unregister_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
-    // esp_websocket_client_destroy(client);
-    vTaskDelete(NULL);
+    vSemaphoreDelete(sema_allow_reconnect_ws);
 }
 }; // namespace Websocket_app
 
@@ -355,10 +375,10 @@ extern "C" void app_main(void) {
     ESP_LOGI(LOG_TAG, "[APP] Startup..");
     ESP_LOGI(LOG_TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(LOG_TAG, "[APP] IDF version: %s", esp_get_idf_version());
-    esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set("websocket_client", ESP_LOG_INFO);
-    esp_log_level_set("transport_ws", ESP_LOG_INFO);
-    esp_log_level_set("trans_tcp", ESP_LOG_INFO);
+    esp_log_level_set("*", ESP_LOG_DEBUG);
+    esp_log_level_set("websocket_client", ESP_LOG_DEBUG);
+    esp_log_level_set("transport_ws", ESP_LOG_DEBUG);
+    esp_log_level_set("trans_tcp", ESP_LOG_DEBUG);
 
     ESP_ERROR_CHECK(nvs_flash_init());
 
@@ -381,32 +401,6 @@ extern "C" void app_main(void) {
         }
     }
 
-    // while (1) { // // 测试 ip6 地址
-    //     esp_ip6_addr_t ip6[5];
-    //     memset(&ip6, 0, 5 * sizeof(esp_ip6_addr_t));
-    //     vTaskDelay(1000 / portTICK_PERIOD_MS);
-
-    //     if (WiFi::sta_netif != NULL) {
-    //         esp_err_t err = esp_netif_create_ip6_linklocal(WiFi::sta_netif);
-    //         if (err != ESP_OK) {
-    //             ESP_LOGE(WiFi::LOG_TAG, "Failed to create IPv6 link-local address on start: %s", esp_err_to_name(err));
-    //         }
-    //     } else {
-    //         ESP_LOGE(WiFi::LOG_TAG, "WiFi::sta_netif is NULL on start");
-    //     }
-
-    //     if (esp_netif_get_all_ip6(WiFi::sta_netif, ip6) == 0) {
-    //         if (ip6->addr[0] || ip6->addr[1] || ip6->addr[2] || ip6->addr[3] != 0) {
-    //             for (int i = 0; i < 4; ++i) {
-    //                 ESP_LOGI(LOG_TAG, "IP%d:%d", i, (&ip6->addr[0]));
-    //             }
-    //             break;
-    //         }
-    //     }
-    // }
-
-    xTaskCreate((TaskFunction_t) &Websocket_app::websocket_begin_task, "ws",
+    xTaskCreate((TaskFunction_t) Websocket_app::websocket_autoreconnect_task, "ws",
                 4096, NULL, 5, NULL);
-
-    // Websocket_app::websocket_task_start();
 }
