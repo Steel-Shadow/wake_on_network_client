@@ -26,22 +26,17 @@
 #include "driver/gpio.h"
 #include "portmacro.h"
 
-/* The examples use simple WiFi configuration that you can set via
-   project configuration menu.
-
-   If you'd rather not, just change the below entries to strings with
-   the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
-
-   You can choose EAP method via project configuration according to the
-   configuration of AP.
+/* 
+    Set WIFI connection config in sdkconfig.
+    Or directly replace the following macros with strings.
 */
-#define EXAMPLE_WIFI_SSID CONFIG_EXAMPLE_WIFI_SSID
-#define EXAMPLE_EAP_METHOD CONFIG_EXAMPLE_EAP_METHOD
+#define WON_WIFI_SSID CONFIG_WON_WIFI_SSID
+#define WON_EAP_METHOD CONFIG_WON_EAP_METHOD
 
-#define EXAMPLE_EAP_ID CONFIG_EXAMPLE_EAP_ID
-#define EXAMPLE_EAP_USERNAME CONFIG_EXAMPLE_EAP_USERNAME
-#define EXAMPLE_EAP_PASSWORD CONFIG_EXAMPLE_EAP_PASSWORD
-#define EXAMPLE_SERVER_CERT_DOMAIN CONFIG_EXAMPLE_SERVER_CERT_DOMAIN
+#define WON_EAP_ID CONFIG_WON_EAP_ID
+#define WON_EAP_USERNAME CONFIG_WON_EAP_USERNAME
+#define WON_EAP_PASSWORD CONFIG_WON_EAP_PASSWORD
+#define WON_SERVER_CERT_DOMAIN CONFIG_WON_SERVER_CERT_DOMAIN
 
 namespace WiFi {
 static const char *LOG_TAG = "WiFi";
@@ -69,7 +64,7 @@ static const int CONNECTED_BIT = BIT0;
    To embed it in the app binary, the PEM, CRT and KEY file is named
    in the component.mk COMPONENT_EMBED_TXTFILES variable.
 */
-#if defined(CONFIG_EXAMPLE_VALIDATE_SERVER_CERT) || defined(CONFIG_EXAMPLE_WPA3_ENTERPRISE) || defined(CONFIG_EXAMPLE_WPA3_192BIT_ENTERPRISE) || defined(CONFIG_ESP_WIFI_EAP_TLS1_3)
+#if defined(CONFIG_WON_VALIDATE_SERVER_CERT) || defined(CONFIG_WON_WPA3_ENTERPRISE) || defined(CONFIG_WON_WPA3_192BIT_ENTERPRISE) || defined(CONFIG_ESP_WIFI_EAP_TLS1_3)
 #define SERVER_CERT_VALIDATION_ENABLED
 #endif
 
@@ -78,17 +73,17 @@ extern uint8_t ca_pem_start[] asm("_binary_ca_pem_start");
 extern uint8_t ca_pem_end[] asm("_binary_ca_pem_end");
 #endif /* SERVER_CERT_VALIDATION_ENABLED */
 
-#ifdef CONFIG_EXAMPLE_EAP_METHOD_TLS
+#ifdef CONFIG_WON_EAP_METHOD_TLS
 extern uint8_t client_crt_start[] asm("_binary_client_crt_start");
 extern uint8_t client_crt_end[] asm("_binary_client_crt_end");
 extern uint8_t client_key_start[] asm("_binary_client_key_start");
 extern uint8_t client_key_end[] asm("_binary_client_key_end");
-#endif /* CONFIG_EXAMPLE_EAP_METHOD_TLS */
+#endif /* CONFIG_WON_EAP_METHOD_TLS */
 
-#if defined CONFIG_EXAMPLE_EAP_METHOD_TTLS
+#if defined CONFIG_WON_EAP_METHOD_TTLS
 esp_eap_ttls_phase2_types TTLS_PHASE2_METHOD =
-        CONFIG_EXAMPLE_EAP_METHOD_TTLS_PHASE_2;
-#endif /* CONFIG_EXAMPLE_EAP_METHOD_TTLS */
+        CONFIG_WON_EAP_METHOD_TTLS_PHASE_2;
+#endif /* CONFIG_WON_EAP_METHOD_TTLS */
 
 static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data) {
@@ -108,11 +103,11 @@ static void initialise_wifi() {
     unsigned int ca_pem_bytes = ca_pem_end - ca_pem_start;
 #endif /* SERVER_CERT_VALIDATION_ENABLED */
 
-#ifdef CONFIG_EXAMPLE_EAP_METHOD_TLS
+#ifdef CONFIG_WON_EAP_METHOD_TLS
     unsigned int client_crt_bytes = client_crt_end - client_crt_start;
     unsigned int client_key_bytes = client_key_end - client_key_start;
     eap_methods = ESP_EAP_TYPE_TLS;
-#endif /* CONFIG_EXAMPLE_EAP_METHOD_TLS */
+#endif /* CONFIG_WON_EAP_METHOD_TLS */
 
     ESP_ERROR_CHECK(esp_netif_init());
     wifi_event_group = xEventGroupCreate();
@@ -130,8 +125,8 @@ static void initialise_wifi() {
     wifi_config_t wifi_config = {
             .sta =
                     {
-                            .ssid = EXAMPLE_WIFI_SSID,
-#if defined(CONFIG_EXAMPLE_WPA3_192BIT_ENTERPRISE) || defined(CONFIG_EXAMPLE_WPA3_ENTERPRISE)
+                            .ssid = WON_WIFI_SSID,
+#if defined(CONFIG_WON_WPA3_192BIT_ENTERPRISE) || defined(CONFIG_WON_WPA3_ENTERPRISE)
                             .pmf_cfg = {.required = true},
 #endif
                     },
@@ -139,43 +134,43 @@ static void initialise_wifi() {
     ESP_LOGI(LOG_TAG, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_eap_client_set_identity((uint8_t *) EXAMPLE_EAP_ID,
-                                                strlen(EXAMPLE_EAP_ID)));
+    ESP_ERROR_CHECK(esp_eap_client_set_identity((uint8_t *) WON_EAP_ID,
+                                                strlen(WON_EAP_ID)));
 
 #ifdef SERVER_CERT_VALIDATION_ENABLED
     ESP_ERROR_CHECK(esp_eap_client_set_ca_cert(ca_pem_start, ca_pem_bytes));
 #endif /* SERVER_CERT_VALIDATION_ENABLED */
 
-#ifdef CONFIG_EXAMPLE_EAP_METHOD_TLS
+#ifdef CONFIG_WON_EAP_METHOD_TLS
     ESP_ERROR_CHECK(esp_eap_client_set_certificate_and_key(
             client_crt_start, client_crt_bytes, client_key_start, client_key_bytes,
             NULL, 0));
-#endif /* CONFIG_EXAMPLE_EAP_METHOD_TLS */
+#endif /* CONFIG_WON_EAP_METHOD_TLS */
 
-#if defined(CONFIG_EXAMPLE_EAP_METHOD_PEAP) || defined(CONFIG_EXAMPLE_EAP_METHOD_TTLS)
-    ESP_ERROR_CHECK(esp_eap_client_set_username((uint8_t *) EXAMPLE_EAP_USERNAME,
-                                                strlen(EXAMPLE_EAP_USERNAME)));
-    ESP_ERROR_CHECK(esp_eap_client_set_password((uint8_t *) EXAMPLE_EAP_PASSWORD,
-                                                strlen(EXAMPLE_EAP_PASSWORD)));
-#endif /* CONFIG_EXAMPLE_EAP_METHOD_PEAP || CONFIG_EXAMPLE_EAP_METHOD_TTLS */
+#if defined(CONFIG_WON_EAP_METHOD_PEAP) || defined(CONFIG_WON_EAP_METHOD_TTLS)
+    ESP_ERROR_CHECK(esp_eap_client_set_username((uint8_t *) WON_EAP_USERNAME,
+                                                strlen(WON_EAP_USERNAME)));
+    ESP_ERROR_CHECK(esp_eap_client_set_password((uint8_t *) WON_EAP_PASSWORD,
+                                                strlen(WON_EAP_PASSWORD)));
+#endif /* CONFIG_WON_EAP_METHOD_PEAP || CONFIG_WON_EAP_METHOD_TTLS */
 
-#if defined CONFIG_EXAMPLE_EAP_METHOD_TTLS
+#if defined CONFIG_WON_EAP_METHOD_TTLS
     ESP_ERROR_CHECK(esp_eap_client_set_ttls_phase2_method(TTLS_PHASE2_METHOD));
     eap_methods = ESP_EAP_TYPE_TTLS;
-#endif /* CONFIG_EXAMPLE_EAP_METHOD_TTLS */
-#if defined(CONFIG_EXAMPLE_EAP_METHOD_PEAP)
+#endif /* CONFIG_WON_EAP_METHOD_TTLS */
+#if defined(CONFIG_WON_EAP_METHOD_PEAP)
     eap_methods = ESP_EAP_TYPE_PEAP;
-#endif /* CONFIG_EXAMPLE_EAP_METHOD_PEAP */
+#endif /* CONFIG_WON_EAP_METHOD_PEAP */
 
-#if defined(CONFIG_EXAMPLE_WPA3_192BIT_ENTERPRISE)
+#if defined(CONFIG_WON_WPA3_192BIT_ENTERPRISE)
     ESP_LOGI(LOG_TAG, "Enabling 192 bit certification");
     ESP_ERROR_CHECK(esp_eap_client_set_suiteb_192bit_certification(true));
 #endif
-#ifdef CONFIG_EXAMPLE_USE_DEFAULT_CERT_BUNDLE
+#ifdef CONFIG_WON_USE_DEFAULT_CERT_BUNDLE
     ESP_ERROR_CHECK(esp_eap_client_use_default_cert_bundle(true));
 #endif
-#ifdef CONFIG_EXAMPLE_VALIDATE_SERVER_CERT_DOMAIN
-    ESP_ERROR_CHECK(esp_eap_client_set_domain_name(EXAMPLE_SERVER_CERT_DOMAIN));
+#ifdef CONFIG_WON_VALIDATE_SERVER_CERT_DOMAIN
+    ESP_ERROR_CHECK(esp_eap_client_set_domain_name(WON_SERVER_CERT_DOMAIN));
 #endif
     ESP_ERROR_CHECK(esp_eap_client_set_eap_methods(eap_methods));
     ESP_ERROR_CHECK(esp_wifi_sta_enterprise_enable());
@@ -375,10 +370,10 @@ extern "C" void app_main(void) {
     ESP_LOGI(LOG_TAG, "[APP] Startup..");
     ESP_LOGI(LOG_TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(LOG_TAG, "[APP] IDF version: %s", esp_get_idf_version());
-    esp_log_level_set("*", ESP_LOG_DEBUG);
-    esp_log_level_set("websocket_client", ESP_LOG_DEBUG);
-    esp_log_level_set("transport_ws", ESP_LOG_DEBUG);
-    esp_log_level_set("trans_tcp", ESP_LOG_DEBUG);
+    esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set("websocket_client", ESP_LOG_INFO);
+    esp_log_level_set("transport_ws", ESP_LOG_INFO);
+    esp_log_level_set("trans_tcp", ESP_LOG_INFO);
 
     ESP_ERROR_CHECK(nvs_flash_init());
 
