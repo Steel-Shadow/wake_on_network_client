@@ -291,7 +291,6 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
         case WEBSOCKET_EVENT_FINISH:
             // The client thread is about to exit.
             ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_FINISH");
-            // TODO: 如果遇到error和disconnect还会走这里的finish吗？
             xSemaphoreGive(sema_allow_reconnect_ws);
             break;
         default:
