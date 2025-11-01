@@ -346,7 +346,9 @@ static void websocket_autoreconnect_task() {
     init_config();
 
     do {
+        ESP_LOGI(LOG_TAG, "[APP] Free memory: %" PRIu32 " bytes", heap_caps_get_free_size(MALLOC_CAP_8BIT));
         ESP_LOGI(LOG_TAG, "Connecting to %s...", websocket_cfg.uri);
+
         client = esp_websocket_client_init(&websocket_cfg);
         esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler, (void *) client);
         esp_websocket_client_start(client);
@@ -355,8 +357,8 @@ static void websocket_autoreconnect_task() {
 
         esp_websocket_client_close(client, portMAX_DELAY);
         esp_websocket_unregister_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
-        esp_websocket_client_close(client, portMAX_DELAY);
-
+        esp_websocket_client_destroy(client);
+        
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     } while (1);
 
