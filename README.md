@@ -63,7 +63,7 @@ Detailed instructions to enable client verification can be found in examples of 
 By default `main.cpp` uses the example URI:
 
 ```text
-wss://wol.steel-shadow.me/ws/Steel-Shadow_secret
+wss://won.steel-shadow.duckdns.org/ws/Steel-Shadow_secret
 ```
 
 Change this to your server's WebSocket URI inside `main.cpp` (variable `uri` in `Websocket_app::init_config`) or make it configurable via menuconfig.

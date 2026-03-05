@@ -25,6 +25,7 @@
 #include <string.h>
 #include "driver/gpio.h"
 #include "portmacro.h"
+#include "tusb_hid.h"
 
 /* 
     Set WIFI connection config in sdkconfig.
@@ -194,6 +195,10 @@ static void init_pin() {
 }
 
 static void open_pc_power() {
+    // USB HID wakeup for sleep state
+    tusb_hid_wakeup();
+
+    // GPIO pulse for power button (via relay)
     gpio_set_level(pin, 1);
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     gpio_set_level(pin, 0);
@@ -308,9 +313,7 @@ static void init_config() {
     flag_first_message = true;
     websocket_cfg = {};
     // wss://echo.websocket.org
-    // wss://wol.steel-shadow.duckdns.org/ws/Steel-Shadow_secret 8443
-    // wss://wol.steel-shadow.me/ws/Steel-Shadow_secret 443
-    const char *uri = "wss://wol.steel-shadow.me/ws/Steel-Shadow_secret";
+    const char *uri = "wss://won.steel-shadow.duckdns.org/ws/Steel-Shadow_secret";
     websocket_cfg.uri = uri;
     websocket_cfg.port = 443;
 
@@ -379,6 +382,7 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(nvs_flash_init());
 
     Pin::init_pin();
+    tusb_hid_init();
 
     WiFi::initialise_wifi();
     while (1) {
