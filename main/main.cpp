@@ -313,7 +313,7 @@ static void init_config() {
     flag_first_message = true;
     websocket_cfg = {};
     // wss://echo.websocket.org
-    const char *uri = "wss://won.steel-shadow.duckdns.org/ws/Steel-Shadow_secret";
+    const char *uri = "wss://won.steel-shadow-bwg.duckdns.org/ws/Steel-Shadow_secret";
     websocket_cfg.uri = uri;
     websocket_cfg.port = 443;
 
