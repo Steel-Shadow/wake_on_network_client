@@ -14,7 +14,6 @@
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_websocket_client.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/idf_additions.h"
 #include "freertos/projdefs.h"
@@ -23,7 +22,6 @@
 #include <cassert>
 #include <cstddef>
 #include <string.h>
-#include "driver/gpio.h"
 #include "portmacro.h"
 #include "tusb_hid.h"
 
@@ -40,14 +38,14 @@
 #define WON_SERVER_CERT_DOMAIN CONFIG_WON_SERVER_CERT_DOMAIN
 
 namespace WiFi {
-static const char *LOG_TAG = "WiFi";
+const char *LOG_TAG = "WiFi";
 
 /* FreeRTOS event group to signal when we are connected & ready to make a
  * request */
-static EventGroupHandle_t wifi_event_group;
+EventGroupHandle_t wifi_event_group;
 
 /* esp netif object representing the WIFI station */
-inline static esp_netif_t *sta_netif = nullptr;
+inline esp_netif_t *sta_netif = nullptr;
 
 /* The event group allows multiple bits for each event,
    but we only care about one event - are we connected
@@ -86,8 +84,8 @@ esp_eap_ttls_phase2_types TTLS_PHASE2_METHOD =
         CONFIG_WON_EAP_METHOD_TTLS_PHASE_2;
 #endif /* CONFIG_WON_EAP_METHOD_TTLS */
 
-static void event_handler(void *arg, esp_event_base_t event_base,
-                          int32_t event_id, void *event_data) {
+void event_handler(void * /*arg*/, esp_event_base_t event_base,
+                   int32_t event_id, void * /*event_data*/) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -98,7 +96,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-static void initialise_wifi() {
+void initialise_wifi() {
     esp_eap_method_t eap_methods = ESP_EAP_TYPE_ALL;
 #ifdef SERVER_CERT_VALIDATION_ENABLED
     unsigned int ca_pem_bytes = ca_pem_end - ca_pem_start;
@@ -181,44 +179,45 @@ static void initialise_wifi() {
 }; // namespace WiFi
 
 namespace Pin {
-auto pin = GPIO_NUM_4;
+// GPIO wake is disabled. The host is woken only through USB HID.
+// auto pin = GPIO_NUM_4;
+//
+// void init_pin() {
+//     gpio_config_t io_conf = {
+//             .pin_bit_mask = (1ULL << pin),
+//             .mode = GPIO_MODE_OUTPUT,
+//             .pull_up_en = GPIO_PULLUP_DISABLE,
+//             .pull_down_en = GPIO_PULLDOWN_DISABLE,
+//             .intr_type = GPIO_INTR_DISABLE,
+//     };
+//     gpio_config(&io_conf);
+// }
 
-static void init_pin() {
-    gpio_config_t io_conf = {
-            .pin_bit_mask = (1ULL << pin),
-            .mode = GPIO_MODE_OUTPUT,
-            .pull_up_en = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&io_conf);
-}
-
-static void open_pc_power() {
+void open_pc_power() {
     // USB HID wakeup for sleep state
     tusb_hid_wakeup();
 
-    // GPIO pulse for power button (via relay)
-    gpio_set_level(pin, 1);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    gpio_set_level(pin, 0);
+    // GPIO pulse for power button (via relay) is disabled.
+    // gpio_set_level(pin, 1);
+    // vTaskDelay(1000 / portTICK_PERIOD_MS);
+    // gpio_set_level(pin, 0);
 }
 } // namespace Pin
 
 namespace Websocket_app {
-static const char *LOG_TAG = "Websocket";
-static SemaphoreHandle_t sema_allow_reconnect_ws;
-static bool flag_first_message;
+const char *LOG_TAG = "Websocket";
+SemaphoreHandle_t sema_allow_reconnect_ws;
+bool flag_first_message;
 
-static void log_error_if_nonzero(const char *message, int error_code) {
+void log_error_if_nonzero(const char *message, int error_code) {
     if (error_code != 0) {
         ESP_LOGE(LOG_TAG, "Last error %s: 0x%x", message, error_code);
     }
 }
 
-static void websocket_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
-    esp_websocket_event_data_t *data = (esp_websocket_event_data_t *) event_data;
-    esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) handler_args;
+void websocket_event_handler(void *handler_args, esp_event_base_t /*base*/, int32_t event_id, void *event_data) {
+    auto *data = (esp_websocket_event_data_t *) event_data;
+    auto *client = (esp_websocket_client_handle_t) handler_args;
     switch (event_id) {
         case WEBSOCKET_EVENT_BEGIN:
             // The client thread is running.
@@ -233,8 +232,8 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
             ESP_LOGI(LOG_TAG, "WEBSOCKET_EVENT_CONNECTED");
             ESP_LOGI(LOG_TAG, "Say \"hello ESP32\"");
             {
-                static const char data[32] = "hello ESP32";
-                esp_websocket_client_send_text(client, data, 32, portMAX_DELAY);
+                static const char data[] = "hello ESP32";
+                esp_websocket_client_send_text(client, data, strlen(data), portMAX_DELAY);
             }
             break;
         case WEBSOCKET_EVENT_DATA:
@@ -254,13 +253,14 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
 
                 const char *welcome = "welcome";
                 const char *trigger = "trigger";
+                size_t len_trigger = strlen(trigger);
                 if (flag_first_message) {
                     flag_first_message = false;
                     size_t len_welcome = strlen(welcome);
-                    if (!(len_welcome == data->data_len && strncmp(welcome, data->data_ptr, len_welcome) == 0)) {
+                    if (len_welcome != data->data_len || strncmp(welcome, data->data_ptr, len_welcome) != 0) {
                         ESP_LOGE(LOG_TAG, "First message is not \"welcome\"!");
                     }
-                } else if (strncmp(trigger, data->data_ptr, strlen(trigger)) == 0) {
+                } else if (data->data_len >= len_trigger && strncmp(trigger, data->data_ptr, len_trigger) == 0) {
                     // [%*.*s]\n
                     ESP_LOGW(LOG_TAG, "Server say: [%.*s]\n", data->data_len, data->data_ptr);
                     Pin::open_pc_power();
@@ -303,11 +303,11 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
     }
 }
 
-static esp_websocket_client_handle_t client;
-static esp_websocket_client_config_t websocket_cfg;
+esp_websocket_client_handle_t client;
+esp_websocket_client_config_t websocket_cfg;
 
 // shutdown this task after "welcome"
-static void init_config() {
+void init_config() {
     sema_allow_reconnect_ws = xSemaphoreCreateBinary();
 
     flag_first_message = true;
@@ -345,25 +345,57 @@ static void init_config() {
 #endif
 }
 
-static void websocket_autoreconnect_task() {
+void websocket_autoreconnect_task() {
     init_config();
 
     do {
+        esp_err_t ret;
         ESP_LOGI(LOG_TAG, "[APP] Free memory: %" PRIu32 " bytes", heap_caps_get_free_size(MALLOC_CAP_8BIT));
         ESP_LOGI(LOG_TAG, "Connecting to %s...", websocket_cfg.uri);
 
         client = esp_websocket_client_init(&websocket_cfg);
-        esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler, (void *) client);
-        esp_websocket_client_start(client);
+        if (client == NULL) {
+            ESP_LOGE(LOG_TAG, "Failed to initialize websocket client");
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        ret = esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler, (void *) client);
+        if (ret != ESP_OK) {
+            ESP_LOGE(LOG_TAG, "Failed to register websocket events: %s", esp_err_to_name(ret));
+            esp_websocket_client_destroy(client);
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        ret = esp_websocket_client_start(client);
+        if (ret != ESP_OK) {
+            ESP_LOGE(LOG_TAG, "Failed to start websocket client: %s", esp_err_to_name(ret));
+            esp_websocket_unregister_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
+            esp_websocket_client_destroy(client);
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            continue;
+        }
 
         xSemaphoreTake(sema_allow_reconnect_ws, portMAX_DELAY);
 
-        esp_websocket_client_close(client, portMAX_DELAY);
-        esp_websocket_unregister_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
-        esp_websocket_client_destroy(client);
-        
+        ret = esp_websocket_client_close(client, portMAX_DELAY);
+        if (ret != ESP_OK) {
+            ESP_LOGW(LOG_TAG, "Failed to close websocket client cleanly: %s", esp_err_to_name(ret));
+        }
+
+        ret = esp_websocket_unregister_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
+        if (ret != ESP_OK) {
+            ESP_LOGW(LOG_TAG, "Failed to unregister websocket events: %s", esp_err_to_name(ret));
+        }
+
+        ret = esp_websocket_client_destroy(client);
+        if (ret != ESP_OK) {
+            ESP_LOGW(LOG_TAG, "Failed to destroy websocket client cleanly: %s", esp_err_to_name(ret));
+        }
+
         vTaskDelay(1000 / portTICK_PERIOD_MS);
-    } while (1);
+    } while (true);
 
     vSemaphoreDelete(sema_allow_reconnect_ws);
 }
@@ -381,25 +413,21 @@ extern "C" void app_main(void) {
 
     ESP_ERROR_CHECK(nvs_flash_init());
 
-    Pin::init_pin();
+    // Pin::init_pin();
     tusb_hid_init();
 
     WiFi::initialise_wifi();
-    while (1) {
-        ESP_LOGI(LOG_TAG, "-----------Waiting for WiFi Init----------");
-        esp_netif_ip_info_t ip;
-        memset(&ip, 0, sizeof(esp_netif_ip_info_t));
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        if (esp_netif_get_ip_info(WiFi::sta_netif, &ip) == 0) {
-            if (ip.ip.addr != 0) {
-                ESP_LOGI(LOG_TAG, "IP:" IPSTR, IP2STR(&ip.ip));
-                ESP_LOGI(LOG_TAG, "MASK:" IPSTR, IP2STR(&ip.netmask));
-                ESP_LOGI(LOG_TAG, "GW:" IPSTR, IP2STR(&ip.gw));
-                ESP_LOGI(LOG_TAG, "-----WiFi Successfully Init-----");
-                break;
-            }
-        }
+    ESP_LOGI(LOG_TAG, "-----------Waiting for WiFi Init----------");
+    xEventGroupWaitBits(WiFi::wifi_event_group, WiFi::CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+
+    esp_netif_ip_info_t ip;
+    memset(&ip, 0, sizeof(esp_netif_ip_info_t));
+    if (esp_netif_get_ip_info(WiFi::sta_netif, &ip) == ESP_OK) {
+        ESP_LOGI(LOG_TAG, "IP:" IPSTR, IP2STR(&ip.ip));
+        ESP_LOGI(LOG_TAG, "MASK:" IPSTR, IP2STR(&ip.netmask));
+        ESP_LOGI(LOG_TAG, "GW:" IPSTR, IP2STR(&ip.gw));
     }
+    ESP_LOGI(LOG_TAG, "-----WiFi Successfully Init-----");
 
     xTaskCreate((TaskFunction_t) Websocket_app::websocket_autoreconnect_task, "ws",
                 4096, NULL, 5, NULL);

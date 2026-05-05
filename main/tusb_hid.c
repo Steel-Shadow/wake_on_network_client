@@ -20,12 +20,12 @@ static const char *TAG = "tusb_hid";
 /**
  * @brief HID report descriptor
  *
- * In this example we implement Keyboard + Mouse HID device,
- * so we must define both report descriptors
+ * This device exposes only a keyboard HID report.
  */
 const uint8_t hid_report_descriptor[] = {
         TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(HID_ITF_PROTOCOL_KEYBOARD)),
-        TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(HID_ITF_PROTOCOL_MOUSE))};
+        // TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(HID_ITF_PROTOCOL_MOUSE)),
+};
 
 /**
  * @brief String descriptor
@@ -64,7 +64,7 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {
 // Invoked when received GET_REPORT control request
 // Application must fill buffer report's content and return its length.
 // Return zero will cause the stack to STALL request
-uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
+uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t * buffer, uint16_t reqlen) {
     (void) instance;
     (void) report_id;
     (void) report_type;
@@ -103,10 +103,10 @@ void tusb_hid_init(void) {
     ESP_LOGI(TAG, "USB HID initialization DONE");
 }
 
-void tusb_hid_wakeup(void) {
+static bool tusb_hid_prepare_report(const char *action) {
     if (!tud_mounted()) {
-        ESP_LOGW(TAG, "USB HID not mounted, cannot send wakeup signal");
-        return;
+        ESP_LOGW(TAG, "USB HID not mounted, cannot %s", action);
+        return false;
     }
 
     // Send remote wakeup signal if supported and suspended
@@ -116,12 +116,26 @@ void tusb_hid_wakeup(void) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-    // Send a mouse movement to wake up the PC from sleep
-    ESP_LOGI(TAG, "Sending HID wakeup (mouse movement)");
-    tud_hid_mouse_report(HID_ITF_PROTOCOL_MOUSE, 0x00, 100, 0, 0, 0);
+    if (!tud_hid_ready()) {
+        ESP_LOGW(TAG, "USB HID not ready, cannot %s", action);
+        return false;
+    }
+
+    return true;
+}
+
+void tusb_hid_press_key(uint8_t modifier, uint8_t keycode) {
+    if (!tusb_hid_prepare_report("send keyboard key")) {
+        return;
+    }
+
+    uint8_t keycodes[6] = {keycode};
+    ESP_LOGI(TAG, "Sending HID keyboard key modifier=0x%02x keycode=0x%02x", modifier, keycode);
+    tud_hid_keyboard_report(HID_ITF_PROTOCOL_KEYBOARD, modifier, keycodes);
     vTaskDelay(pdMS_TO_TICKS(50));
-    tud_hid_mouse_report(HID_ITF_PROTOCOL_MOUSE, 0x00, -100, 0, 0, 0);
-    vTaskDelay(pdMS_TO_TICKS(50));
-    // Clear mouse report
-    tud_hid_mouse_report(HID_ITF_PROTOCOL_MOUSE, 0x00, 0, 0, 0, 0);
+    tud_hid_keyboard_report(HID_ITF_PROTOCOL_KEYBOARD, 0, NULL);
+}
+
+void tusb_hid_wakeup(void) {
+    tusb_hid_press_key(KEYBOARD_MODIFIER_RIGHTSHIFT, 0);
 }

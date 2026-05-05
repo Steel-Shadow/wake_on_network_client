@@ -1,0 +1,2 @@
+Checks: "clang-diagnostic-*,clang-analyzer-*,cert-,misc-*,performance-*,readability-*,portability-,modernize-*,-modernize-use-trailing-return-type,-readability-identifier-length,-readability-magic-numbers,-readability-isolate-declaration,-misc-no-recursion,-misc-use-internal-linkage,-readability-function-cognitive-complexity"
+# WarningsAsErrors: "*"
